@@ -1,0 +1,396 @@
+// packages/database/prisma/schema.prisma
+// Elorge SPM — Complete Schema v3.0
+// Industry-neutral. Works for banking, manufacturing, insurance, FMCG,
+// real estate, telecoms, or any sales-driven organisation.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─── ENUMS ────────────────────────────────────────────────────────────────────
+
+enum Role {
+  OFFICER    // field sales person
+  MANAGER    // supervises officers
+  DIRECTOR   // oversees multiple managers / regions
+  FINANCE    // confirms transactions, exports payroll
+  ADMIN      // Super Admin — configures org, products, rules
+}
+
+enum LeadStatus {
+  NEW
+  CONTACTED
+  NEGOTIATING
+  CONVERTED
+  LOST
+}
+
+enum CommissionStatus {
+  PENDING      // calculated, awaiting manager approval
+  APPROVED     // manager approved, awaiting payment
+  PAID         // disbursed to officer
+  DISPUTED     // officer raised a dispute
+  CLAWED_BACK  // reversed (e.g. loan default, returned goods)
+}
+
+// ─── ORGANISATION ─────────────────────────────────────────────────────────────
+
+model Organisation {
+  id   String @id @default(cuid())
+  name String
+
+  // Industry — determines UI labels and defaults but NOT platform capabilities
+  // Any organisation can use any feature regardless of industry
+  industry String
+  // BANKING | INSURANCE | MANUFACTURING | FMCG | REAL_ESTATE
+  // TELECOMS | LOGISTICS | HEALTHCARE | EDUCATION | OTHER
+
+  subscriptionTier String @default("GROWTH")
+  // STARTER | GROWTH | PROFESSIONAL | ENTERPRISE
+
+  // ── Compensation Model ───────────────────────────────────────────────────
+  // How this organisation compensates its sales staff
+  compensationModel String @default("COMMISSION_ONLY")
+  // SALARY_ONLY              — fixed salary, no commission. Platform delivers performance
+  //                            intelligence, client attribution, and projected earnings only.
+  //                            Commission engine runs in simulation mode — no records persisted.
+  // COMMISSION_ONLY          — agents earn purely on what they sell (insurance, real estate)
+  // SALARY_PLUS_COMMISSION   — base salary + commission on sales (most manufacturers, FMCG)
+  // RETAINER_PLUS_COMMISSION — fixed monthly retainer + commission (insurance agents)
+
+  // ── Global commission settings ────────────────────────────────────────────
+  // Applied as fallback if no product-specific rule is found
+  defaultCommissionRate Decimal? @db.Decimal(6, 4) // e.g. 0.0050 = 0.5%
+
+  // Commission approval workflow
+  requireManagerApproval  Boolean @default(true)  // manager must approve before paid
+  requireFinanceApproval  Boolean @default(false) // finance must also approve (optional)
+  commissionPayDay         Int?    // day of month commissions are paid e.g. 25
+
+  // ── Trial / Subscription ──────────────────────────────────────────────────
+  isActive       Boolean   @default(true)
+  trialEndsAt    DateTime?
+  subscribedAt   DateTime?
+
+  // ── SSO ───────────────────────────────────────────────────────────────────
+  ssoEnabled      Boolean @default(false)
+  ssoProvider     String? // AZURE_AD | GOOGLE
+  ssoTenantId     String?
+  ssoClientId     String?
+  ssoClientSecret String?
+  ssoDisplayName  String?
+  ssoLogoUrl      String?
+
+  // ── Branding ──────────────────────────────────────────────────────────────
+  logoUrl      String?
+  primaryColor String? // hex e.g. #1A3C6E — for white-label theming
+  settings     Json    @default("{}")
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  users             User[]
+  products          Product[]
+  clients           Client[]
+  leads             Lead[]
+  commissions       Commission[]
+  remappingRequests RemappingRequest[]
+
+  @@map("organisations")
+}
+
+// ─── USER ─────────────────────────────────────────────────────────────────────
+
+model User {
+  id             String  @id @default(cuid())
+  email          String  @unique
+  name           String
+  staffId        String?
+  role           Role    @default(OFFICER)
+  organisationId String
+  branchId       String? // branch / region / territory label
+  managerId      String?
+  expoPushToken  String?
+
+  // ── Compensation ──────────────────────────────────────────────────────────
+  // Only relevant when org compensationModel is SALARY_PLUS_COMMISSION
+  // or RETAINER_PLUS_COMMISSION. Elorge does not run payroll —
+  // this figure is stored for Finance to see total compensation picture.
+  baseSalary      Decimal? @db.Decimal(12, 2) // monthly base in NGN
+  retainerAmount  Decimal? @db.Decimal(12, 2) // monthly retainer in NGN
+  currency        String   @default("NGN")
+
+  // ── Commission target ─────────────────────────────────────────────────────
+  // Monthly commission target set by manager. Used for progress bars.
+  monthlyTarget   Decimal? @db.Decimal(12, 2)
+
+  // ── Auth ──────────────────────────────────────────────────────────────────
+  loginMethod  String    @default("PASSWORD") // PASSWORD | SSO
+  passwordHash String?
+  lastLoginAt  DateTime?
+
+  // ── Staff Exit ────────────────────────────────────────────────────────────
+  isActive   Boolean   @default(true)
+  exitedAt   DateTime?
+  exitReason String?   // RESIGNATION | TERMINATION | TRANSFER
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  organisation     Organisation @relation(fields: [organisationId], references: [id])
+  manager          User?        @relation("reports", fields: [managerId], references: [id])
+  reports          User[]       @relation("reports")
+
+  leads            Lead[]
+  originalClients  Client[]     @relation("originalOfficer")
+  servicingClients Client[]     @relation("servicingOfficer")
+  commissions      Commission[]
+
+  remappingFrom      RemappingRequest[] @relation("exitingOfficer")
+  remappingTo        RemappingRequest[] @relation("incomingOfficer")
+  remappingRequested RemappingRequest[] @relation("requestedByUser")
+  remappingReviewed  RemappingRequest[] @relation("reviewedByUser")
+
+  auditLogs AuditLog[]
+
+  @@map("users")
+}
+
+// ─── PRODUCT ──────────────────────────────────────────────────────────────────
+// Completely org-configured. No hardcoded banking products.
+// A bank configures Fixed Deposits. A manufacturer configures Cement Bags.
+// An insurer configures Life Policies. All use the same model.
+
+model Product {
+  id             String  @id @default(cuid())
+  organisationId String
+  name           String  // e.g. "Fixed Deposit", "Cement 50kg Bag", "Life Policy"
+  code           String  // short code for webhooks e.g. FD-001, CEM-001
+  description    String? // optional explanation shown to officers
+
+  // ── Classification ────────────────────────────────────────────────────────
+  category String
+  // Banking:       LOAN | DEPOSIT | INVESTMENT | CARD | INSURANCE
+  // Manufacturing: GOODS | SERVICE
+  // Insurance:     POLICY | RENEWAL | ENDORSEMENT
+  // Real Estate:   PROPERTY_SALE | LEASE | REFERRAL
+  // Generic:       PRODUCT | SERVICE | OTHER
+
+  unit String @default("UNIT")
+  // What one "sale" means for this product
+  // UNIT | ACCOUNT | POLICY | BAG | TONNE | PROPERTY | SUBSCRIPTION
+
+  // ── Commission Rule ───────────────────────────────────────────────────────
+  // Stored as JSON — fully configurable by Super Admin through the UI
+  // No code change needed when an org changes their commission structure
+  //
+  // Supported rule types:
+  //
+  // FLAT_RATE: fixed % of transaction value
+  //   { type: "FLAT_RATE", rate: 0.005, description: "0.5% of value" }
+  //
+  // FLAT_PER_UNIT: fixed amount per unit sold
+  //   { type: "FLAT_PER_UNIT", amountPerUnit: 50, description: "₦50 per bag" }
+  //
+  // TIERED: % rate climbs as monthly volume grows
+  //   { type: "TIERED", tiers: [{ minVolume: 0, maxVolume: 10, rate: 0.005 }, ...] }
+  //
+  // TIERED_PER_UNIT: per-unit amount climbs with volume
+  //   { type: "TIERED_PER_UNIT", tiers: [{ minVolume: 0, maxVolume: 100, amountPerUnit: 50 }, ...] }
+  //
+  // SPLIT: shared between multiple roles
+  //   { type: "SPLIT", baseRule: {...}, shares: [{ role: "OFFICER", pct: 0.7 }, { role: "MANAGER", pct: 0.3 }] }
+  //
+  // Optional additions to any rule:
+  //   accelerator: { startDate, endDate, multiplier }  — time-bound bonus
+  //   crossSellBonus: 5000                              — extra ₦5,000 for new product on existing client
+  //   clawbackWindowDays: 90                           — days within which default triggers reversal
+  //   cap: 500000                                      — maximum commission per transaction in NGN
+  //   floor: 1000                                      — minimum commission per transaction in NGN
+
+  commissionRule Json
+  isActive       Boolean  @default(true)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  organisation Organisation  @relation(fields: [organisationId], references: [id])
+  transactions Transaction[]
+
+  @@unique([organisationId, code])
+  @@map("products")
+}
+
+// ─── LEAD ─────────────────────────────────────────────────────────────────────
+
+model Lead {
+  id              String     @id @default(cuid())
+  officerId       String
+  organisationId  String
+  prospectName    String
+  phone           String
+  email           String?
+  company         String?    // business/organisation name if B2B
+  productInterest String     // what product/service they are interested in
+  estimatedValue  Decimal?   @db.Decimal(15, 2)
+  estimatedUnits  Int?       // for unit-based products (e.g. 500 bags of cement)
+  status          LeadStatus @default(NEW)
+  notes           String?
+  nextFollowUp    DateTime?
+  convertedAt     DateTime?
+  source          String?    // REFERRAL | COLD_CALL | WALK_IN | SOCIAL_MEDIA | OTHER
+  createdAt       DateTime   @default(now())
+  updatedAt       DateTime   @updatedAt
+
+  officer      User         @relation(fields: [officerId], references: [id])
+  organisation Organisation @relation(fields: [organisationId], references: [id])
+  client       Client?
+
+  @@map("leads")
+}
+
+// ─── CLIENT ───────────────────────────────────────────────────────────────────
+
+model Client {
+  id                 String    @id @default(cuid())
+  officerId          String    // PERMANENT — original officer — NEVER changes
+  servicingOfficerId String?   // set when original officer exits
+  remappingType      String?   // HYBRID | FULL | FREEZE
+  isOfficerActive    Boolean   @default(true)
+  remappedAt         DateTime?
+  remappedBy         String?
+  exitReason         String?
+  organisationId     String
+  leadId             String?   @unique
+
+  name          String
+  phone         String
+  email         String?
+  company       String?       // business name (B2B clients)
+  accountNumber String?       // bank account / policy number / customer ID
+  territory     String?       // sales territory / region
+  clientType    String        @default("INDIVIDUAL") // INDIVIDUAL | BUSINESS | GOVERNMENT
+  onboardedAt   DateTime      @default(now())
+
+  officer          User           @relation("originalOfficer", fields: [officerId], references: [id])
+  servicingOfficer User?          @relation("servicingOfficer", fields: [servicingOfficerId], references: [id])
+  organisation     Organisation   @relation(fields: [organisationId], references: [id])
+  lead             Lead?          @relation(fields: [leadId], references: [id])
+  transactions     Transaction[]
+
+  @@map("clients")
+}
+
+// ─── TRANSACTION ──────────────────────────────────────────────────────────────
+
+model Transaction {
+  id            String   @id @default(cuid())
+  clientId      String
+  productId     String
+  value         Decimal  @db.Decimal(15, 2) // total invoice/transaction value in NGN
+  quantity      Int?                         // units sold (for FLAT_PER_UNIT rules)
+  confirmedAt   DateTime @default(now())
+  confirmedBy   String   // userId of confirmer or "WEBHOOK"
+  externalRef   String?  // reference from core banking / ERP system
+  notes         String?  // e.g. "30-day payment terms agreed"
+  isFromWebhook Boolean  @default(false)
+
+  client     Client     @relation(fields: [clientId], references: [id])
+  product    Product    @relation(fields: [productId], references: [id])
+  commission Commission?
+
+  @@map("transactions")
+}
+
+// ─── COMMISSION ───────────────────────────────────────────────────────────────
+
+model Commission {
+  id             String           @id @default(cuid())
+  officerId      String
+  transactionId  String           @unique
+  organisationId String
+  amount         Decimal          @db.Decimal(15, 2) // commission in NGN
+  ruleSnapshot   Json             // exact rule used — preserved forever for audit
+  status         CommissionStatus @default(PENDING)
+  approvedBy     String?          // manager userId
+  approvedAt     DateTime?
+  financeApprovedBy String?       // finance userId (if org requires double approval)
+  financeApprovedAt DateTime?
+  paidAt         DateTime?
+  periodMonth    Int
+  periodYear     Int
+  createdAt      DateTime         @default(now())
+
+  officer     User        @relation(fields: [officerId], references: [id])
+  transaction Transaction @relation(fields: [transactionId], references: [id])
+  dispute     Dispute?
+
+  @@map("commissions")
+}
+
+// ─── DISPUTE ──────────────────────────────────────────────────────────────────
+
+model Dispute {
+  id           String    @id @default(cuid())
+  commissionId String    @unique
+  raisedBy     String
+  reason       String
+  status       String    @default("OPEN") // OPEN | UNDER_REVIEW | RESOLVED | REJECTED
+  resolution   String?
+  resolvedBy   String?
+  resolvedAt   DateTime?
+  createdAt    DateTime  @default(now())
+
+  commission Commission @relation(fields: [commissionId], references: [id])
+
+  @@map("disputes")
+}
+
+// ─── REMAPPING REQUEST ────────────────────────────────────────────────────────
+
+model RemappingRequest {
+  id             String   @id @default(cuid())
+  organisationId String
+  fromOfficerId  String
+  toOfficerId    String?
+  remapType      String   // HYBRID | FULL | FREEZE
+  exitType       String   // RESIGNATION | TERMINATION | TRANSFER
+  exitDate       DateTime
+  clientIds      String[]
+  requestedBy    String
+  requestedAt    DateTime @default(now())
+  status         String   @default("PENDING") // PENDING | APPROVED | REJECTED | MODIFIED
+  reviewedBy     String?
+  reviewedAt     DateTime?
+  reviewNotes    String?
+  executedAt     DateTime?
+
+  organisation    Organisation @relation(fields: [organisationId], references: [id])
+  fromOfficer     User         @relation("exitingOfficer", fields: [fromOfficerId], references: [id])
+  toOfficer       User?        @relation("incomingOfficer", fields: [toOfficerId], references: [id])
+  requestedByUser User         @relation("requestedByUser", fields: [requestedBy], references: [id])
+  reviewedByUser  User?        @relation("reviewedByUser", fields: [reviewedBy], references: [id])
+
+  @@map("remapping_requests")
+}
+
+// ─── AUDIT LOG ────────────────────────────────────────────────────────────────
+
+model AuditLog {
+  id         String   @id @default(cuid())
+  userId     String
+  action     String
+  entityType String
+  entityId   String
+  oldValue   Json?
+  newValue   Json?
+  timestamp  DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@map("audit_logs")
+}

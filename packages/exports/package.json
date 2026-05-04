@@ -1,0 +1,8 @@
+{
+  "name": "@elorge/exports",
+  "version": "0.1.0",
+  "main": "./payroll.ts",
+  "dependencies": {
+    "exceljs": "^4.4.0"
+  }
+}

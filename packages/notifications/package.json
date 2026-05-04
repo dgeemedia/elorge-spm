@@ -1,0 +1,9 @@
+{
+  "name": "@elorge/notifications",
+  "version": "0.1.0",
+  "main": "./push.ts",
+  "dependencies": {
+    "expo-server-sdk": "^3.10.0",
+    "resend": "^3.2.0"
+  }
+}
