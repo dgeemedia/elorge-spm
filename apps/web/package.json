@@ -8,8 +8,8 @@
     "type-check": "tsc --noEmit"
   },
   "dependencies": {
-    "@elorge/engine":  "*",
-    "@elorge/shared":  "*",
+    "@elorge/engine":  "workspace:*",
+    "@elorge/shared":  "workspace:*",
     "@prisma/client":  "^5.12.0",
     "next":            "^14.2.0",
     "next-auth":       "^5.0.0-beta.18",

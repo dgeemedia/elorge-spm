@@ -1,7 +1,11 @@
 {
   "name": "elorge-spm",
   "private": true,
-  "workspaces": ["apps/*", "packages/*"],
+  "packageManager": "pnpm@10.28.0",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
   "scripts": {
     "dev": "turbo run dev",
     "build": "turbo run build",
@@ -11,9 +15,10 @@
     "db:generate": "prisma generate --schema packages/database/prisma/schema.prisma"
   },
   "devDependencies": {
-    "turbo": "^2.0.0",
-    "typescript": "^5.4.0",
+    "@types/node": "^20.0.0",
+    "prisma": "^5.22.0",
     "tsx": "^4.7.0",
-    "@types/node": "^20.0.0"
+    "turbo": "^2.0.0",
+    "typescript": "^5.4.0"
   }
 }

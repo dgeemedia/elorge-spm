@@ -314,21 +314,22 @@ model Commission {
   officerId      String
   transactionId  String           @unique
   organisationId String
-  amount         Decimal          @db.Decimal(15, 2) // commission in NGN
-  ruleSnapshot   Json             // exact rule used — preserved forever for audit
+  amount         Decimal          @db.Decimal(15, 2)
+  ruleSnapshot   Json
   status         CommissionStatus @default(PENDING)
-  approvedBy     String?          // manager userId
+  approvedBy     String?
   approvedAt     DateTime?
-  financeApprovedBy String?       // finance userId (if org requires double approval)
+  financeApprovedBy String?
   financeApprovedAt DateTime?
   paidAt         DateTime?
   periodMonth    Int
   periodYear     Int
   createdAt      DateTime         @default(now())
 
-  officer     User        @relation(fields: [officerId], references: [id])
-  transaction Transaction @relation(fields: [transactionId], references: [id])
-  dispute     Dispute?
+  officer      User         @relation(fields: [officerId], references: [id])
+  organisation Organisation @relation(fields: [organisationId], references: [id])  // ← ADD THIS
+  transaction  Transaction  @relation(fields: [transactionId], references: [id])
+  dispute      Dispute?
 
   @@map("commissions")
 }

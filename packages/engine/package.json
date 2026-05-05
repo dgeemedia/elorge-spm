@@ -3,6 +3,6 @@
   "version": "0.1.0",
   "main": "./calculate.ts",
   "dependencies": {
-    "@elorge/shared": "*"
+    "@elorge/shared": "workspace:*"
   }
 }
